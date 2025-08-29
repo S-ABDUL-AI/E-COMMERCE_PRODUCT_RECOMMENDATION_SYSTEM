@@ -1,0 +1,19 @@
+# Data manipulation
+pandas
+numpy
+
+# Machine Learning & Recommendation
+scikit-learn
+joblib
+
+# Text processing
+scipy
+
+# Visualization
+matplotlib
+seaborn
+
+# Web app
+streamlit
+
+
