@@ -22,12 +22,19 @@ user_similarity_df = pd.DataFrame(user_similarity, index=user_item_matrix.index,
 def predict_rating(user_id, product_id):
     if product_id not in user_item_matrix.columns:
         return 0
+    if user_id not in user_similarity_df.index:
+        return 0
     sim_scores = user_similarity_df[user_id]
     product_ratings = user_item_matrix[product_id]
-    return np.dot(sim_scores, product_ratings) / sim_scores.sum()
+    denom = sim_scores.sum()
+    if denom == 0:
+        return 0
+    return np.dot(sim_scores, product_ratings) / denom
 
 
 def cf_recommendations(user_id, top_n=5):
+    if user_id not in user_item_matrix.index:
+        return []
     unrated_products = user_item_matrix.columns[user_item_matrix.loc[user_id] == 0]
     scores = [(pid, predict_rating(user_id, pid)) for pid in unrated_products]
     scores.sort(key=lambda x: x[1], reverse=True)
@@ -97,7 +104,10 @@ elif menu == "🔮 Single User":
     if st.button("Get Recommendations"):
         st.subheader("Collaborative Filtering Recommendations")
         cf_recs = cf_recommendations(user_id, top_n)
-        st.table(pd.DataFrame(cf_recs, columns=["Product ID", "Product Name"]))
+        if cf_recs:
+            st.table(pd.DataFrame(cf_recs, columns=["Product ID", "Product Name"]))
+        else:
+            st.warning("No collaborative recommendations found for this user.")
 
         st.subheader("Hybrid Recommendations")
         hybrid_recs = hybrid_recommend(user_id, top_n)
@@ -115,11 +125,16 @@ elif menu == "📂 Batch Prediction":
         results = []
 
         for uid in batch_df['user_id']:
+            if uid not in user_item_matrix.index:
+                continue
             recs = hybrid_recommend(uid, top_n)
             for pid, pname in recs:
                 results.append({"user_id": uid, "product_id": pid, "product_name": pname})
 
         results_df = pd.DataFrame(results)
+        if results_df.empty:
+            st.warning("No valid user IDs found in uploaded file.")
+            st.stop()
         st.dataframe(results_df.head(20))
         results_df.to_csv("batch_recommendations.csv", index=False)
         st.success("💾 Batch Recommendations saved as batch_recommendations.csv")
