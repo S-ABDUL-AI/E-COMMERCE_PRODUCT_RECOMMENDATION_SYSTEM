@@ -190,8 +190,9 @@ def build_models(csv_path: str = "product_recs.csv"):
         raise ValueError("Not enough user-product coverage to model recommendations.")
 
     user_similarity = cosine_similarity(implicit.values)
+    # Fill on NumPy array before wrapping in DataFrame to avoid read-only view errors on some runtimes.
+    np.fill_diagonal(user_similarity, 0.0)
     user_similarity_df = pd.DataFrame(user_similarity, index=implicit.index, columns=implicit.index)
-    np.fill_diagonal(user_similarity_df.values, 0.0)
 
     products["product_info"] = products["product_name"].astype(str) + " " + products["category"].astype(str)
     tfidf = TfidfVectorizer(stop_words="english", min_df=1)
