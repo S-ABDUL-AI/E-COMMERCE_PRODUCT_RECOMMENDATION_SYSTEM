@@ -134,6 +134,20 @@ def _safe_int(value) -> int | None:
         return None
 
 
+def is_mobile_client() -> bool:
+    """Best-effort mobile detection from request headers, with safe fallback."""
+    try:
+        context = getattr(st, "context", None)
+        if context is None:
+            return False
+        headers = getattr(context, "headers", {}) or {}
+        user_agent = str(headers.get("user-agent", "")).lower()
+        mobile_markers = ["iphone", "android", "mobile", "ipad", "ipod"]
+        return any(marker in user_agent for marker in mobile_markers)
+    except Exception:
+        return False
+
+
 @st.cache_data(show_spinner="Loading and validating recommendation data...")
 def load_and_validate_data(csv_path: str = "product_recs.csv") -> tuple[pd.DataFrame, dict]:
     df = pd.read_csv(csv_path)
@@ -550,6 +564,29 @@ labels = {uid: user_profile_label(df, uid) for uid in all_user_ids}
 selected_uid = st.sidebar.selectbox("Focus customer", all_user_ids, format_func=lambda uid: labels[uid])
 top_n = st.sidebar.slider("Recommendations per customer", 3, 15, 6)
 alpha = st.sidebar.slider("Hybrid weight (CF vs content)", 0.0, 1.0, 0.70, 0.05)
+
+st.sidebar.markdown("---")
+is_mobile = is_mobile_client()
+with st.sidebar.expander("How to use this app", expanded=not is_mobile):
+    if is_mobile:
+        st.markdown(
+            "1. Choose a page from **Navigate**.\n"
+            "2. Pick a **Focus customer**.\n"
+            "3. Adjust **Recommendations** and **Hybrid weight**.\n"
+            "4. Start with **Executive overview**.\n"
+            "5. Use **Batch recommendations** for CSV upload/download."
+        )
+    else:
+        st.markdown(
+            "1. Pick a page from **Navigate**.\n"
+            "2. Select a **Focus customer**.\n"
+            "3. Set **Recommendations per customer**.\n"
+            "4. Tune **Hybrid weight**:\n"
+            "   - Higher values favor customer-to-customer similarity.\n"
+            "   - Lower values favor product text/category similarity.\n"
+            "5. Start with **Executive overview** for the recommended action.\n"
+            "6. Use **Batch recommendations** to upload `user_id` CSV and download outputs."
+        )
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
