@@ -352,6 +352,74 @@ def render_toned_bar_chart(
     st.altair_chart(chart, use_container_width=True)
 
 
+def estimate_business_kpis(
+    eval_metrics: dict,
+    focus_recs_df: pd.DataFrame,
+    baseline_ctr_pct: float,
+    baseline_cvr_pct: float,
+    baseline_aov: float,
+    baseline_ltv: float,
+    monthly_sessions: int,
+) -> dict:
+    """Estimate KPI uplift from recommendation quality signals.
+
+    This is a directional estimator, not a causal measurement framework.
+    """
+    precision = float(eval_metrics.get("precision_at_k", 0.0))
+    coverage = float(eval_metrics.get("coverage", 0.0))
+    mean_confidence = (
+        float(focus_recs_df["confidence"].mean()) / 100.0
+        if not focus_recs_df.empty and "confidence" in focus_recs_df.columns
+        else 0.0
+    )
+    quality_signal = min(1.0, max(0.0, 0.5 * precision + 0.3 * mean_confidence + 0.2 * coverage))
+
+    # Suggested uplift factors (capped to stay realistic for a simple estimator).
+    ctr_uplift = min(0.45, 0.08 + 0.65 * quality_signal)
+    cvr_uplift = min(0.35, 0.05 + 0.45 * quality_signal)
+    aov_uplift = min(0.22, 0.03 + 0.26 * quality_signal)
+    ltv_uplift = min(0.28, 0.04 + 0.30 * quality_signal)
+
+    proj_ctr_pct = baseline_ctr_pct * (1 + ctr_uplift)
+    proj_cvr_pct = baseline_cvr_pct * (1 + cvr_uplift)
+    proj_aov = baseline_aov * (1 + aov_uplift)
+    proj_ltv = baseline_ltv * (1 + ltv_uplift)
+
+    clicks_before = monthly_sessions * (baseline_ctr_pct / 100.0)
+    clicks_after = monthly_sessions * (proj_ctr_pct / 100.0)
+    orders_before = clicks_before * (baseline_cvr_pct / 100.0)
+    orders_after = clicks_after * (proj_cvr_pct / 100.0)
+    revenue_before = orders_before * baseline_aov
+    revenue_after = orders_after * proj_aov
+
+    return {
+        "quality_signal": quality_signal,
+        "ctr_uplift": ctr_uplift,
+        "cvr_uplift": cvr_uplift,
+        "aov_uplift": aov_uplift,
+        "ltv_uplift": ltv_uplift,
+        "baseline": {
+            "ctr_pct": baseline_ctr_pct,
+            "cvr_pct": baseline_cvr_pct,
+            "aov": baseline_aov,
+            "ltv": baseline_ltv,
+            "clicks": clicks_before,
+            "orders": orders_before,
+            "revenue": revenue_before,
+        },
+        "projected": {
+            "ctr_pct": proj_ctr_pct,
+            "cvr_pct": proj_cvr_pct,
+            "aov": proj_aov,
+            "ltv": proj_ltv,
+            "clicks": clicks_after,
+            "orders": orders_after,
+            "revenue": revenue_after,
+        },
+        "incremental_revenue": revenue_after - revenue_before,
+    }
+
+
 def hybrid_recommend(
     implicit_matrix: pd.DataFrame,
     sim_df: pd.DataFrame,
@@ -556,7 +624,7 @@ st.markdown(
 st.sidebar.header("Controls")
 page = st.sidebar.radio(
     "Navigate",
-    ["Executive overview", "Single customer", "Similar products", "Batch recommendations", "Data quality"],
+    ["Executive overview", "Single customer", "Similar products", "Batch recommendations", "Business impact", "Data quality"],
 )
 
 all_user_ids = sorted([int(x) for x in implicit_matrix.index.tolist()])
@@ -855,6 +923,80 @@ elif page == "Batch recommendations":
                 buf = io.StringIO()
                 out.to_csv(buf, index=False)
                 st.download_button("Download batch recommendations", buf.getvalue(), "batch_recommendations.csv", "text/csv")
+
+elif page == "Business impact":
+    st.subheader("Business impact estimator (CTR, CVR, AOV, LTV)")
+    st.caption(
+        "Enter your current baseline KPIs. The app estimates directional uplift from recommendation quality "
+        "signals (precision, confidence, and catalog coverage)."
+    )
+
+    i1, i2, i3 = st.columns(3)
+    with i1:
+        baseline_ctr_pct = st.number_input("Baseline CTR (%)", min_value=0.1, max_value=100.0, value=3.5, step=0.1)
+        baseline_cvr_pct = st.number_input("Baseline conversion rate (%)", min_value=0.1, max_value=100.0, value=1.8, step=0.1)
+    with i2:
+        baseline_aov = st.number_input("Baseline AOV ($)", min_value=1.0, value=52.0, step=1.0)
+        baseline_ltv = st.number_input("Baseline LTV ($)", min_value=1.0, value=220.0, step=1.0)
+    with i3:
+        monthly_sessions = st.number_input("Monthly sessions", min_value=100, value=100000, step=1000)
+
+    impact = estimate_business_kpis(
+        eval_metrics=eval_metrics,
+        focus_recs_df=focus_recs_df,
+        baseline_ctr_pct=float(baseline_ctr_pct),
+        baseline_cvr_pct=float(baseline_cvr_pct),
+        baseline_aov=float(baseline_aov),
+        baseline_ltv=float(baseline_ltv),
+        monthly_sessions=int(monthly_sessions),
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Projected CTR", f"{impact['projected']['ctr_pct']:.2f}%", f"+{impact['ctr_uplift']:.1%}")
+    with m2:
+        st.metric("Projected CVR", f"{impact['projected']['cvr_pct']:.2f}%", f"+{impact['cvr_uplift']:.1%}")
+    with m3:
+        st.metric("Projected AOV", f"${impact['projected']['aov']:,.2f}", f"+{impact['aov_uplift']:.1%}")
+    with m4:
+        st.metric("Projected LTV", f"${impact['projected']['ltv']:,.2f}", f"+{impact['ltv_uplift']:.1%}")
+
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        st.metric(
+            "Orders / month",
+            f"{impact['projected']['orders']:,.0f}",
+            f"{impact['projected']['orders'] - impact['baseline']['orders']:,.0f}",
+        )
+    with r2:
+        st.metric(
+            "Revenue / month",
+            f"${impact['projected']['revenue']:,.0f}",
+            f"${impact['incremental_revenue']:,.0f}",
+        )
+    with r3:
+        st.metric("Model quality signal", f"{impact['quality_signal']:.0%}")
+
+    compare_df = pd.DataFrame(
+        [
+            {"metric": "CTR (%)", "baseline": impact["baseline"]["ctr_pct"], "projected": impact["projected"]["ctr_pct"]},
+            {"metric": "CVR (%)", "baseline": impact["baseline"]["cvr_pct"], "projected": impact["projected"]["cvr_pct"]},
+            {"metric": "AOV ($)", "baseline": impact["baseline"]["aov"], "projected": impact["projected"]["aov"]},
+            {"metric": "LTV ($)", "baseline": impact["baseline"]["ltv"], "projected": impact["projected"]["ltv"]},
+        ]
+    )
+    compare_df["uplift_pct"] = (
+        (compare_df["projected"] - compare_df["baseline"]) / compare_df["baseline"].replace(0, np.nan)
+    ).fillna(0.0)
+    st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+    uplift_chart = compare_df[["metric", "uplift_pct"]].copy()
+    render_toned_bar_chart(uplift_chart, "metric", "uplift_pct", color="#16a34a", y_title="Estimated uplift")
+
+    st.info(
+        "Important: these are directional estimates for planning, not causal proof. "
+        "For true impact measurement, run an A/B test with production click/order events."
+    )
 
 else:
     st.subheader("Data quality and trust checks")
